@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { OpenCodeStackGatewayBackend } from "./adapter.js";
 import { createInferenceGateway } from "./gateway/server.js";
 import { createTransparentModels, openCodeGoAccountsFromEnv } from "./router/index.js";
+import { startRouteDump } from "./state-dump.js";
 
 loadAccounts();
 
@@ -21,6 +22,14 @@ const backend = new OpenCodeStackGatewayBackend(models, {
   provider: "opencode-go",
   ...(modelList && modelList.length > 0 ? { modelIds: modelList } : {}),
 });
+const stateFile = process.env.OGW_STATE_FILE;
+if (stateFile) {
+  const intervalMs = Number(process.env.OGW_STATE_INTERVAL_MS ?? "60000");
+  if (!Number.isInteger(intervalMs) || intervalMs < 0) throw new Error("OGW_STATE_INTERVAL_MS must be a non-negative integer");
+  startRouteDump(models, stateFile, intervalMs);
+  console.log(`route state ${stateFile} every ${intervalMs}ms`);
+}
+
 const gateway = createInferenceGateway({ backend, host, port });
 await gateway.listen();
 console.log(`gateway listening at ${gateway.url}`);

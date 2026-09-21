@@ -336,6 +336,15 @@ export class OpenCodeStackModels implements Models {
     return this.servedRoutes.get(message);
   }
 
+  stickySnapshot(): { routeKey: string; accountId: string }[] {
+    return [...this.stickySessions].map(([routeKey, accountId]) => ({ routeKey, accountId }));
+  }
+
+  restoreSticky(rows: readonly { routeKey: string; accountId: string }[]): void {
+    this.stickySessions.clear();
+    for (const row of rows) this.stickySessions.set(row.routeKey, row.accountId);
+  }
+
   private async pipeAttempt(
     outer: AssistantMessageEventStream,
     stream: AssistantMessageEventStream,
