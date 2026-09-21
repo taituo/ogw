@@ -1,4 +1,5 @@
 export { createTransparentModels } from "./create-transparent.js";
+export { routeKey } from "./open-code-stack-models.js";
 export { OpenCodeStackModels } from "./open-code-stack-models.js";
 export { manualFallbacksFromEnv, openCodeGoAccountsFromEnv } from "./from-env.js";
 export type {

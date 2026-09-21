@@ -133,10 +133,22 @@ function stableAccountSession(sessionId: string | undefined, accountId: string):
   return sessionId ? `${sessionId}::ocgo::${accountId}` : undefined;
 }
 
+/** Sticky slot for one session and one model. Two models in the same session do not share an account. */
+export function routeKey(sessionId: string | undefined, modelId: string): string | undefined {
+  if (!sessionId) return undefined;
+  return `${sessionId}\n${modelId}`;
+}
+
+export interface ServedRoute {
+  accountId: string;
+  model: string;
+}
+
 export class OpenCodeStackModels implements Models {
   private readonly accounts: AccountRuntime[];
   private readonly fallbackHealth = new Map<string, FallbackHealth>();
   private readonly stickySessions = new Map<string, string>();
+  private readonly servedRoutes = new WeakMap<AssistantMessage, ServedRoute>();
   private roundRobinCursor = 0;
 
   private constructor(
@@ -233,13 +245,15 @@ export class OpenCodeStackModels implements Models {
     return allowed.has(failure);
   }
 
-  private candidateAccounts(logicalSessionId: string | undefined): AccountRuntime[] {
+  private candidateAccounts(logicalSessionId: string | undefined, modelId: string): AccountRuntime[] {
     const now = this.now();
-    const healthy = this.accounts.filter((account) => (account.health.cooldownUntil ?? 0) <= now);
+    const capable = this.accounts.filter((account) => account.runtime.getModel(OPENCODE_GO_PROVIDER, modelId));
+    const healthy = capable.filter((account) => (account.health.cooldownUntil ?? 0) <= now);
     if (healthy.length === 0) return [];
 
-    const stickyId = logicalSessionId ? this.stickySessions.get(logicalSessionId) : undefined;
-    const sticky = stickyId ? healthy.find((account) => account.id === stickyId) : undefined;
+    const stickyId = routeKey(logicalSessionId, modelId);
+    const stickyAccountId = stickyId ? this.stickySessions.get(stickyId) : undefined;
+    const sticky = stickyAccountId ? healthy.find((account) => account.id === stickyAccountId) : undefined;
     const remaining = sticky ? healthy.filter((account) => account !== sticky) : healthy;
     const strategy = this.config.openCodeGo.strategy ?? "sticky-least-loaded";
 
@@ -288,7 +302,8 @@ export class OpenCodeStackModels implements Models {
     health.successes++;
     health.cooldownUntil = undefined;
     health.latencyEmaMs = health.latencyEmaMs === undefined ? latencyMs : health.latencyEmaMs * 0.8 + latencyMs * 0.2;
-    if (logicalSessionId) this.stickySessions.set(logicalSessionId, account.id);
+    const key = routeKey(logicalSessionId, model);
+    if (key) this.stickySessions.set(key, account.id);
     this.emit({ type: "opencode_account_succeeded", accountId: account.id, model, latencyMs });
   }
 
@@ -316,9 +331,15 @@ export class OpenCodeStackModels implements Models {
     state.latencyEmaMs = state.latencyEmaMs === undefined ? latencyMs : state.latencyEmaMs * 0.8 + latencyMs * 0.2;
   }
 
+  /** Which account and model produced this assistant message, when this stack served it. */
+  routeFor(message: AssistantMessage): ServedRoute | undefined {
+    return this.servedRoutes.get(message);
+  }
+
   private async pipeAttempt(
     outer: AssistantMessageEventStream,
     stream: AssistantMessageEventStream,
+    route?: ServedRoute,
   ): Promise<
     | { kind: "done"; message: AssistantMessage }
     | { kind: "retry"; error: AssistantMessage; failure: RouteFailureClass; committed: false }
@@ -345,6 +366,7 @@ export class OpenCodeStackModels implements Models {
         committed = true;
         if (startEvent) outer.push(startEvent);
       }
+      if (event.type === "done" && route) this.servedRoutes.set(event.message, route);
       outer.push(event);
       if (event.type === "done") return { kind: "done", message: event.message };
     }
@@ -367,7 +389,7 @@ export class OpenCodeStackModels implements Models {
 
     void (async () => {
       let lastError: AssistantMessage | undefined;
-      const accounts = this.candidateAccounts(logicalSessionId);
+      const accounts = this.candidateAccounts(logicalSessionId, requested.id);
 
       for (const account of accounts) {
         const accountModel = account.runtime.getModel(OPENCODE_GO_PROVIDER, requested.id);
@@ -398,7 +420,7 @@ export class OpenCodeStackModels implements Models {
               await userOnResponse?.(response, model);
             },
           });
-          const result = await this.pipeAttempt(outer, stream);
+          const result = await this.pipeAttempt(outer, stream, { accountId: account.id, model: requested.id });
 
           if (result.kind === "done") {
             this.markAccountSuccess(account, requested.id, this.now() - startedAt, logicalSessionId);
@@ -448,6 +470,7 @@ export class OpenCodeStackModels implements Models {
               ...options,
               ...(logicalSessionId ? { sessionId: logicalSessionId } : {}),
             }),
+            { accountId: `fallback:${route.id}`, model: modelId },
           );
           if (result.kind === "done") {
             this.markFallbackSuccess(route, this.now() - startedAt);
@@ -523,7 +546,7 @@ export class OpenCodeStackModels implements Models {
     if (model.provider !== OPENCODE_GO_PROVIDER) return this.manual.stream(model, context, options);
     // AgentHarness uses streamSimple. Keep low-level stream deterministic rather than
     // pretending a cross-API fallback is type-safe.
-    const account = this.candidateAccounts(options?.sessionId ?? this.options.sessionId)[0];
+    const account = this.candidateAccounts(options?.sessionId ?? this.options.sessionId, model.id)[0];
     if (!account) return this.manual.stream(model, context, options);
     const accountModel = account.runtime.getModel(OPENCODE_GO_PROVIDER, model.id) as Model<TApi> | undefined;
     if (!accountModel) return this.manual.stream(model, context, options);

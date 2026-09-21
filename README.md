@@ -18,3 +18,5 @@ PI_OPENCODE_GO_STACK=go-a:OPENCODE_GO_KEY_A,go-b:OPENCODE_GO_KEY_B npm start
 `PI_OPENCODE_GO_STACK` names environment variables. It does not contain the keys.
 
 Node >= 22. `npm start` runs the TypeScript with `tsx`. `npm run build` writes `dist/` with `tsc`.
+
+When several models are in use, a session sticks to an account per model. A call for `deepseek-v4-flash` does not have to ride the account that just served `gpt-5.6-luna`. An account that does not offer the requested model is skipped. A completed chat response carries `x-ogw-account` and `x-ogw-model`. A streamed chat chunk names them as `ogw_account` and `ogw_model` on the final event.

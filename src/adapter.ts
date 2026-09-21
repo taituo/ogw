@@ -83,7 +83,7 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
       return json({ error: { message: message.errorMessage ?? "Provider failed" } }, message.stopReason === "aborted" ? 499 : 502);
     }
-    return json(toChatCompletion(message, requestedModel));
+    return json(toChatCompletion(message, servedModelId(message, requestedModel)), 200, routeHeaders(servedRoute(this.models, message)));
   }
 
   private async handleResponses(request: Request, model: Model<any>, requestedModel: string): Promise<Response> {
@@ -113,7 +113,7 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
     if (payload.store !== false) await this.storeResponse(id, appendAssistant(context, message), tenantId);
     return json(toResponsesObject({
       id,
-      model: requestedModel,
+      model: servedModelId(message, requestedModel),
       createdAt: Math.floor(message.timestamp / 1000),
       blocks: responseBlocks(message),
       usage: responseUsage(message),
@@ -121,14 +121,15 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
       ...(message.stopReason === "length" ? { incompleteDetails: { reason: "max_output_tokens" } } : {}),
       previousResponseId: payload.previous_response_id ?? null,
       instructions: payload.instructions ?? null,
-    }));
+    }), 200, routeHeaders(servedRoute(this.models, message)));
   }
 
   private streamChat(model: Model<any>, context: Context, requestedModel: string, options: SimpleStreamOptions): Response {
     const encoder = new TextEncoder();
     const id = `chatcmpl-${crypto.randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
-    const stream = this.models.streamSimple(model, context, options);
+    const models = this.models;
+    const stream = models.streamSimple(model, context, options);
     // A disconnecting consumer closes the controller while the upstream loop
     // may still be in flight. Guard every enqueue/close/error so a torn-down
     // stream can never throw an uncaught ERR_INVALID_STATE (which killed the
@@ -166,7 +167,16 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
                   choices: [{ index: 0, delta: { tool_calls: [{ index: event.contentIndex, function: { arguments: event.delta } }] }, finish_reason: null }],
                 })));
               } else if (event.type === "done") {
-                send(encoder.encode(sse({ id, object: "chat.completion.chunk", created, model: requestedModel, choices: [{ index: 0, delta: {}, finish_reason: finishReason(event.message) }], usage: toChatUsage(event.message) })));
+                const route = servedRoute(models, event.message);
+                send(encoder.encode(sse({
+                  id,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: servedModelId(event.message, requestedModel),
+                  ...(route ? { ogw_account: route.accountId, ogw_model: route.model } : {}),
+                  choices: [{ index: 0, delta: {}, finish_reason: finishReason(event.message) }],
+                  usage: toChatUsage(event.message),
+                })));
               } else if (event.type === "error") {
                 send(encoder.encode(sse({ error: { message: event.error.errorMessage ?? "Provider failed" } })));
               }
@@ -519,4 +529,26 @@ function headerSessionId(headers: Headers): string | undefined {
 }
 
 function sse(value: unknown): string { return `data: ${JSON.stringify(value)}\n\n`; }
-function json(value: unknown, status = 200): Response { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
+function json(value: unknown, status = 200, headers: HeadersInit = { "content-type": "application/json" }): Response {
+  const merged = new Headers(headers);
+  if (!merged.has("content-type")) merged.set("content-type", "application/json");
+  return new Response(JSON.stringify(value), { status, headers: merged });
+}
+
+function servedRoute(models: Models, message: AssistantMessage): { accountId: string; model: string } | undefined {
+  const tagged = models as Models & { routeFor?: (message: AssistantMessage) => { accountId: string; model: string } | undefined };
+  return tagged.routeFor?.(message);
+}
+
+function routeHeaders(route: { accountId: string; model: string } | undefined): HeadersInit {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (!route) return headers;
+  headers["x-ogw-account"] = route.accountId;
+  headers["x-ogw-model"] = route.model;
+  return headers;
+}
+
+function servedModelId(message: AssistantMessage, requestedModel: string): string {
+  const reported = (message as { model?: unknown }).model;
+  return typeof reported === "string" && reported.trim() ? reported.trim() : requestedModel;
+}
