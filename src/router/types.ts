@@ -80,6 +80,7 @@ export type StackRouterEvent =
     }
   | { type: "opencode_account_succeeded"; accountId: string; model: string; latencyMs: number }
   | { type: "opencode_account_skipped"; accountId: string; reason: "cooldown" | "model_not_found" | "disabled" }
+  | { type: "opencode_fault_injected"; accountId: string; model: string; fault: string; failure: RouteFailureClass }
   | { type: "manual_fallback_selected"; routeId: string; provider: string; model: string }
   | {
       type: "manual_fallback_failed";

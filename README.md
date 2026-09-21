@@ -22,3 +22,5 @@ Node >= 22. `npm start` runs the TypeScript with `tsx`. `npm run build` writes `
 When several models are in use, a session sticks to an account per model. A call for `deepseek-v4-flash` does not have to ride the account that just served `gpt-5.6-luna`. An account that does not offer the requested model is skipped. A completed chat response carries `x-ogw-account` and `x-ogw-model`. A streamed chat chunk names them as `ogw_account` and `ogw_model` on the final event.
 
 That route table stays in memory. Set `OGW_STATE_FILE` to a SQLite path and it is copied there every `OGW_STATE_INTERVAL_MS` milliseconds (default 60000) and read back on the next start. Without the path, nothing is written.
+
+`OGW_FAULTS` pretends the network failed before a call leaves the process. `go-a:reset` makes that account fail with `ECONNRESET` on every attempt, cool down, and the next account is tried. Also `timeout`, `dns`, `refused`, `502`, `503`, `504`, and `429`. A model can be named: `go-b/deepseek-v4-flash:502`. A trailing count stops after that many fires: `go-a:timeout:2`. One request can ask for the same thing with the header `x-ogw-fault: timeout`. Unset, nothing is injected.

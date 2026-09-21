@@ -69,6 +69,7 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
   }
 
   private async handleChat(request: Request, model: Model<any>, requestedModel: string): Promise<Response> {
+    this.#armFault(request);
     const payload = await request.json() as ChatRequest;
     const context = toPiChatContext(payload, model);
     const sessionId = headerSessionId(request.headers);
@@ -87,6 +88,7 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
   }
 
   private async handleResponses(request: Request, model: Model<any>, requestedModel: string): Promise<Response> {
+    this.#armFault(request);
     const payload = await request.json() as ResponsesRequest;
     const tenantId = request.headers.get("x-synth-tenant") ?? undefined;
     const previousRecord = payload.previous_response_id ? await this.#continuations.getContinuation(payload.previous_response_id, tenantId) : undefined;
@@ -277,6 +279,12 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
       cancel() { alive = false; (stream as { abort?: () => void }).abort?.(); },
     });
     return new Response(body, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
+  }
+
+  #armFault(request: Request): void {
+    const spec = request.headers.get("x-ogw-fault");
+    const target = this.models as { armFault?: (spec: string) => void };
+    if (spec && target.armFault) target.armFault(spec);
   }
 
   private async storeResponse(id: string, context: Context, tenantId?: string): Promise<void> {

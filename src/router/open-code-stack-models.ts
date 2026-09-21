@@ -25,6 +25,7 @@ import {
   type ProviderResponse,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FaultGate, type FaultRule } from "../faults.js";
 import type {
   AccountHealth,
   FallbackHealth,
@@ -91,7 +92,7 @@ function classifyFailure(message: string | undefined, aborted = false): RouteFai
     return "quota";
   }
   if (/\b429\b|rate.?limit|too many requests|throttl/.test(text)) return "rate_limit";
-  if (/timeout|timed out|deadline|idle timeout/.test(text)) return "timeout";
+  if (/timeout|timed out|deadline|idle timeout|econnreset|enotfound|econnrefused|eai_again/.test(text)) return "timeout";
   if (/context.*(length|window)|too many tokens|maximum context|token limit/.test(text)) return "context";
   if (/\b5\d\d\b|bad gateway|service unavailable|gateway timeout|upstream/.test(text)) return "provider_5xx";
   if (/\b400\b|bad request|invalid request|schema|tool.*invalid/.test(text)) return "bad_request";
@@ -149,6 +150,7 @@ export class OpenCodeStackModels implements Models {
   private readonly fallbackHealth = new Map<string, FallbackHealth>();
   private readonly stickySessions = new Map<string, string>();
   private readonly servedRoutes = new WeakMap<AssistantMessage, ServedRoute>();
+  private readonly faults: FaultGate;
   private roundRobinCursor = 0;
 
   private constructor(
@@ -159,9 +161,16 @@ export class OpenCodeStackModels implements Models {
       sessionId?: string;
       onEvent?: (event: StackRouterEvent) => void;
       now?: () => number;
+      faults?: readonly FaultRule[];
     },
   ) {
     this.accounts = accounts;
+    this.faults = new FaultGate(options.faults ?? []);
+  }
+
+  /** One-shot fault for the next matching attempt. A request header uses this. */
+  armFault(spec: string): void {
+    this.faults.arm(spec);
   }
 
   static async create(options: {
@@ -171,6 +180,7 @@ export class OpenCodeStackModels implements Models {
     /** Standard Pi runtime. Omit to use normal auth.json/environment configuration. */
     manualRuntime?: ModelRuntime;
     now?: () => number;
+    faults?: readonly FaultRule[];
   }): Promise<OpenCodeStackModels> {
     const manual = options.manualRuntime ?? (await ModelRuntime.create());
     const accounts: AccountRuntime[] = [];
@@ -205,6 +215,7 @@ export class OpenCodeStackModels implements Models {
       sessionId: options.sessionId,
       onEvent: options.onEvent,
       now: options.now,
+      faults: options.faults,
     });
   }
 
@@ -401,6 +412,25 @@ export class OpenCodeStackModels implements Models {
       const accounts = this.candidateAccounts(logicalSessionId, requested.id);
 
       for (const account of accounts) {
+        const injected = this.faults.take(account.id, requested.id);
+        if (injected) {
+          const failure = injected.failure;
+          lastError = syntheticError(requested, injected.message);
+          this.markAccountFailure(account, requested.id, failure, injected.message);
+          this.emit({
+            type: "opencode_fault_injected",
+            accountId: account.id,
+            model: requested.id,
+            fault: injected.fault,
+            failure,
+          });
+          if (!this.shouldFallback(failure)) {
+            outer.push({ type: "error", reason: "error", error: lastError });
+            return;
+          }
+          continue;
+        }
+
         const accountModel = account.runtime.getModel(OPENCODE_GO_PROVIDER, requested.id);
         if (!accountModel) {
           this.emit({ type: "opencode_account_skipped", accountId: account.id, reason: "model_not_found" });

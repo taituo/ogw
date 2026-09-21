@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { OpenCodeStackGatewayBackend } from "./adapter.js";
 import { createInferenceGateway } from "./gateway/server.js";
 import { createTransparentModels, openCodeGoAccountsFromEnv } from "./router/index.js";
+import { parseFaultSpec } from "./faults.js";
 import { startRouteDump } from "./state-dump.js";
 
 loadAccounts();
@@ -10,12 +11,15 @@ const host = process.env.GATEWAY_HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? "8787");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer from 1 to 65535");
 
+const faults = parseFaultSpec(process.env.OGW_FAULTS);
 const { models } = await createTransparentModels({
   sessionId: process.env.OGW_SESSION_ID ?? "ogw",
+  faults,
   config: {
     openCodeGo: { strategy: "sticky-least-loaded", accounts: openCodeGoAccountsFromEnv() },
   },
 });
+if (faults.length > 0) console.log(`injected faults: ${process.env.OGW_FAULTS}`);
 
 const modelList = process.env.OPENCODE_GO_MODELS?.split(",").map((id) => id.trim()).filter(Boolean);
 const backend = new OpenCodeStackGatewayBackend(models, {

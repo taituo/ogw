@@ -1,5 +1,6 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { OpenCodeStackModels } from "./open-code-stack-models.js";
+import type { FaultRule } from "../faults.js";
 import type { OpenCodeGoAccountConfig, StackRouterEvent, TransparentRouterConfig } from "./types.js";
 
 function accountKey(account: OpenCodeGoAccountConfig): string | undefined {
@@ -12,6 +13,7 @@ export async function createTransparentModels(options: {
   config: TransparentRouterConfig;
   sessionId?: string;
   onEvent?: (event: StackRouterEvent) => void;
+  faults?: readonly FaultRule[];
   /** Optional preconfigured normal Pi runtime for non-stacked providers. */
   manualRuntime?: ModelRuntime;
   /**
@@ -33,6 +35,7 @@ export async function createTransparentModels(options: {
     sessionId: options.sessionId,
     onEvent: options.onEvent,
     manualRuntime: manual,
+    faults: options.faults,
   });
   return { manual, models };
 }

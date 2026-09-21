@@ -9,3 +9,4 @@ export {
 export type { GatewayPrincipal } from "./gateway/tenant-policy.js";
 export { createTransparentModels, openCodeGoAccountsFromEnv } from "./router/index.js";
 export { startRouteDump } from "./state-dump.js";
+export { parseFaultSpec } from "./faults.js";
