@@ -22,6 +22,7 @@ import {
   type ModelsRefreshResult,
   type ModelsSimpleStreamOptions,
   type Provider,
+  type ProviderHeaders,
   type ProviderResponse,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -130,8 +131,20 @@ function requestedModelId(route: ManualFallbackRoute, requested: Model<Api>): st
   return !route.model || route.model === "$requested" ? requested.id : route.model;
 }
 
-function stableAccountSession(sessionId: string | undefined, accountId: string): string | undefined {
-  return sessionId ? `${sessionId}::ocgo::${accountId}` : undefined;
+function stableAccountSession(sessionId: string | undefined, accountId: string): string {
+  return sessionId ? `${sessionId}::ocgo::${accountId}` : `anon::ocgo::${accountId}::${crypto.randomUUID()}`;
+}
+
+/** Session Pi already accepts as `sessionId`, copied onto the OpenCode HTTP header. */
+export function openCodeRequestOptions<T extends { sessionId?: string; headers?: ProviderHeaders }>(
+  options: T | undefined,
+  sessionId: string,
+): T {
+  return {
+    ...options,
+    sessionId,
+    headers: { ...options?.headers, "x-opencode-session": sessionId },
+  } as unknown as T;
 }
 
 /** Sticky slot for one session and one model. Two models in the same session do not share an account. */
@@ -452,8 +465,7 @@ export class OpenCodeStackModels implements Models {
           const accountSessionId = stableAccountSession(logicalSessionId, account.id);
           const userOnResponse = options?.onResponse;
           const stream = account.runtime.streamSimple(accountModel, context, {
-            ...options,
-            ...(accountSessionId ? { sessionId: accountSessionId } : {}),
+            ...openCodeRequestOptions(options, accountSessionId),
             onResponse: async (response, model) => {
               attemptHeaders.response = response;
               await userOnResponse?.(response, model);
@@ -589,10 +601,11 @@ export class OpenCodeStackModels implements Models {
     if (!account) return this.manual.stream(model, context, options);
     const accountModel = account.runtime.getModel(OPENCODE_GO_PROVIDER, model.id) as Model<TApi> | undefined;
     if (!accountModel) return this.manual.stream(model, context, options);
-    return account.runtime.stream(accountModel, context, {
-      ...options,
-      sessionId: stableAccountSession(options?.sessionId ?? this.options.sessionId, account.id),
-    } as ModelsApiStreamOptions<TApi>);
+    return account.runtime.stream(
+      accountModel,
+      context,
+      openCodeRequestOptions(options, stableAccountSession(options?.sessionId ?? this.options.sessionId, account.id)) as ModelsApiStreamOptions<TApi>,
+    );
   }
 
   complete<TApi extends Api>(model: Model<TApi>, context: Context, options?: ModelsApiStreamOptions<TApi>) {
