@@ -1,8 +1,10 @@
 {
   "name": "ogw",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/lib.ts"
+  },
   "description": "OpenAI-compatible gateway in front of one or more OpenCode Go accounts.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
